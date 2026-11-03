@@ -27,18 +27,26 @@ room 只做三件事（对应 `src/world.ts` 头部注释）：
 - room 只 import node 内置模块和 `cortico/core/*`（平台核心 API）。**永远不要 import 任何 `cortico-world-*` 插件**。
 - 对其它插件（尤其桌宠 desktop-pet），只能走**公开能力**，不能改它们、不能调用它们没有暴露为公开接口的东西。
 
+**可改 / 不可改边界（2026-11-03 联网核实 Coopanion 官方架构）**
+
+- Coopanion 是「组装品」：**Cortico Core**（独立仓库 `Pal-AI-Lab/Cortico`）+ Cormini Persona + desktop-pet World + computer use；其 `packages/` 只有 `cortico-provider-coo` 和 `cortico-world-desktop-pet`。
+- Cortico 四层：Core / Persona / Memory / **World**。World 是「隔离边界」，输入输出只有**事件（events）+ 工具调用（tool calls）**；World 不直接访问 Memory、不互相 import、不互相调用。
+- **不可改**：`resources/`（Coopanion 主程序、Cortico core、官方桌宠 `cortico-world-desktop-pet`、`cortico-provider-coo`）——改了会被重装/更新覆盖，且破坏平台隔离。
+- **可改**：`data/`（本 room 扩展、桌宠数据/配置、其它自己装的扩展）。
+- **对其它 world 只用公开能力**：模型工具（`pet_say`/`pet_ask`/`pet_move_to`/`pet_set`/`pet_quiet`/`pet_act`/`pet_cua_*`，**没有 `pet_face`**）+ 只读 HTTP（`/api/state`/`/api/skin`/`/api/prefs`/`/api/speech`/`/api/avatar`/`/api/figures*`）。
+
 ### 2.2 跨插件协作 = 喊 AI
 
 这是本插件最重要的设计原则，也是它可移植的根子：
 
 | 想要的效果 | 实现方式 | 性质 |
 |---|---|---|
-| 她走到电视旁 | `POST http://127.0.0.1:7797/api/move {to, run}` | 桌宠公开 HTTP，确定性 |
-| 她坐下 / 转身 / 换表情 | `host.pushEvent({ type:'room.tv', text:'请调 pet_act(...) 坐下…' })` | 发自然语言，让 AI 调公开工具 `pet_act` / `pet_face` |
+| 她走到电视旁 | `host.pushEvent({ type:'room.tv', text:'请调 pet_move_to(...) 走过去…' })` | 发自然语言，让 AI 调公开工具 `pet_move_to` |
+| 她坐下 / 站起 / 换表情 | `host.pushEvent({ type:'room.tv', text:'请调 pet_act(...) 坐下…' })` | 发自然语言，让 AI 调公开工具 `pet_act` |
 | 电视亮起 | room 自己切图（`furn-tv-on.png`）+ SSE 推给桌面层 | 纯 room 内部 |
 
 - 「喊 AI」= 通过事件文本，让模型去调用目标插件**公开暴露的工具**。room 从不直接调用 `pet_act` 的实现，只写工具名。
-- **这是优点，不是缺陷**：room 不依赖 desktop-pet 的代码，只依赖「有一个会 `pet_act` 的桌宠角色」这个能力。将来换一个桌宠实现，只要它也提供 `pet_act` / `pet_move_to` / `pet_face` 工具名，room 一行都不用改。
+- **这是优点，不是缺陷**：room 不依赖 desktop-pet 的代码，只依赖「有一个会 `pet_act` 的桌宠角色」这个能力。将来换一个桌宠实现，只要它也提供 `pet_act` / `pet_move_to` 工具名，room 一行都不用改。
 - 因此「她看电视没坐下」不是 bug，而是这条原则的边界表现：坐/转身是「请求 AI」，AI 可能自主决定是否执行。**接手人不要试图把它改成直接调用桌宠内部代码**——那会破坏 dsh 平台的插件隔离。
 
 ### 2.3 一个相关的边界事实（能力依赖，不是代码耦合）
@@ -98,9 +106,9 @@ cortico-world-room/
 - **家具能力表 `FURNITURE`**（`world.ts`）：每件家具声明 `label / layer / caps(drag,resize,hide,flip,power) / keys(配置字段名) / sprites(off,on)`。`sceneJson()`、`stateJson().furniture`、WebUI 面板全部由它派生——**加新家具只需加一条表项 + RoomConfig 四个字段 + 两张图**，面板不用改。电视 `power:true`；书架 `power:true`（开关接 `setRead`，按钮文案「开始看书 / 合上书」），并带 `status` 文案（「在看 / 空着」）。
 - WebUI 面板：`panels` 只有一项 `id: 'furniture'`（标题「拖动家具」），客户端脚本 `dist/webui-v11.js`。**没有家具标签页**：舞台同台显示所有家具（都能拖），下方控制项按 `state.furniture` 顺序纵向堆叠（电视一行在上、书架一行在下），每行按 `caps` 渲染大小/开关/隐藏/镜像。
 - **桌面拖动**（`scene-host`）：任意家具都能在桌面上拖，松手 `POST /api/furniture/position`。链路是「渲染层量每件家具的窗口矩形 → IPC `furn-state` 报给主进程 → 主进程只在鼠标命中矩形时关掉 `setIgnoreMouseEvents`」。**只按电视几何判定的话，鼠标落不到别的家具上，就表现为「拖不动」**，排查时先看这里。
-- **书本飞出（纯视觉）**：`sceneJson()` 额外推送 `sprites['book-off']`(合上) / `sprites['book-on']`(摊开) 和 `book: { on, from, to, width }`；`scene-host/renderer.html` 的 `syncBook()` 监听 `book.on` 的跳变：false→true 播「从书架 `from` 飞到 `to` → 沿中书脊摊开 → 轻浮动」；true→false 反向收回书架。`to` 用 `bookX ?? petXGuess()`：`bookX` 在开书那一下锁定一次（= 当时的 `petXGuess()`），随后 `refreshBookTarget()` 主动 `GET` 桌宠 `/api/state` 一次、把 `startX` 回填校准；之后她再走动 `to` 不变，书不跟随。她**不动**，是书飞过去。
-- **看书不挪她**：`bridgeRead()` 不发 `/api/move`，事件文本只要求她「真的打开书读 / 读不到就合书」；`followPet()` 里书架不移动她（只有电视会）。
-- **`petXGuess()` 的能力边界**：桌宠只暴露 `GET /api/state`（皮肤/配置）和 `POST /api/move`，**没有实时坐标**。`probePetX()` 每 2 秒读一次 `startX`；它的语义在项目里有过两种说法（`probePetX` 注释假设「会随移动更新」），**实测更接近「记住的起始位置，不随移动更新」——以实测为准**。所以 room 维护 `lastPetX`：启动时取一次 `startX` 初值，之后 room 每次 `/api/move` 都会更新；开书时 `refreshBookTarget()` 再主动读一次 `startX` 校准 `bookX`。她若被别的工具（`pet_move_to` / 她自己的 roam）挪走，room 不知道，书会停在旧位置。要真跟随需在桌宠侧加只读位置路由（另一个插件的改动）。
+- **书本飞出（纯视觉）**：`sceneJson()` 额外推送 `sprites['book-off']`(合上) / `sprites['book-on']`(摊开) 和 `book: { on, from, to, width }`；`scene-host/renderer.html` 的 `syncBook()` 监听 `book.on` 的跳变：false→true 播「从书架 `from` 飞到 `to` → 沿中书脊摊开 → 轻浮动」；true→false 反向收回书架。`to` 用 `bookX ?? petXGuess()`：`bookX` 在开书那一下同步定为书架坐点 `readPetX()`（从家具配置推导，拖书架坐点跟书一起动）；之后她再走动 `to` 不变，书不跟随。她**不动**，是书飞过去。
+- **看书时她走去书架**：`bridgeRead()` 事件文本让 AI 调 `pet_move_to` 走到书架旁、`pet_act(sit)` 坐下（不直连 `/api/move`）；`followPet()` 里书架不移动她（只有电视会）。
+- **`petXGuess()` 的能力边界**：桌宠只暴露 `GET /api/state`（皮肤/配置，含 `startX`），**没有实时坐标**。`probePetX()` 只在启动时读一次 `startX` 作 `lastPetX` 种子、读完自收定时器（`startX` 只在桌宠 stop 时落盘，运行中不更新）；之后 `lastPetX` 由 room 的 `movePet()` 乐观更新。她若被别的工具（`pet_move_to` / 她自己的 roam）挪走，room 不知道——但书现在落在书架坐点 `readPetX()`，不受影响。要真跟随需在桌宠侧上游化只读位置路由（另一个插件的改动）。
 - **跨屏**：任意家具拖到屏幕左右边缘（24px 内）都会触发换屏——IPC `switch-display` → 主进程 clamp 屏号 → `applyBounds()` 整层挪到相邻屏 → `/api/tv/display` 持久化 `displayIndex`。被拖的那件落到新屏对侧边缘（向右切 0.05、向左切 0.95）并写回自己的位置。**换屏是场景级动作**：一个透明窗口只铺一块屏，两件家具会一起到新屏上；换屏后本次拖动结束（跨窗口坐标会漂），桌宠与桌面坐标系不一致是已知 P2。
 - **看书**：工具 `room_read(on, book, minutes)`、事件 `room.read`、槽位 `read`(书架)。链路与看电视完全同构（`bridgeRead`）；书架位置/大小读配置 `worlds.room.readX`(默认 0.55) / `readWidth`(默认 8vw)，她坐在家具左侧一个身位（默认 x≈0.46）。看电视/看书互斥，互相切换时会先收掉另一个。
 - **看电视心跳 / 自动关电视**：`room_tv_tick(note)` 刷新 `lastTvTick`，作为「她还在看」的证据。常量 `TV_TICK_TIMEOUT_MS = 60_000`；timer 每 5 秒检查，`state.tv && now - lastTvTick > 60s` 就 `setTv(false, ..., 'timeout')` 自动关电视。看电视期间 `startTvPing()` 每 60 秒 `pushEvent` 一次「你还在看吗」，给她主动续期（`room_tv_tick`）或主动关掉（`room_tv(on=false)`）的时机。**所有能改 `state.tv` 的路径都走 `syncTvRuntime(on)`**（`setTv` / `occupyTool` / `POST /api/occupy` / `release`）。
@@ -115,12 +123,12 @@ cortico-world-room/
 
 | 能力 | 形态 | 来源 |
 |---|---|---|
-| `POST /api/move {to, run}` | 公开 HTTP | 桌宠 desktop-pet，端口 7797（配置 `worlds.room.petPort`） |
-| `pet_act` / `pet_face` / `pet_move_to` | 模型工具名（写在事件文本里） | 桌宠暴露给模型的工具 |
+| `GET /api/state` | 公开 HTTP（只读配置） | 桌宠 desktop-pet，端口 7797（配置 `worlds.room.petPort`）；只用于取 `startX` 作启动种子 |
+| `pet_act` / `pet_move_to` | 模型工具名（写在事件文本里） | 桌宠暴露给模型的工具 |
 | `host.pushEvent` / `host.log` | 平台核心 API | `cortico/core` |
 | `describeTools` / `WorldDefinition` | 平台核心 API | `cortico/world.ts` |
 
-`/api/move` 只认 `{to, run}` 两个字段，**不认** `sit` / `face`。`/api/act`、`/api/face`、`/api/roam` 在桌宠里没有路由，不要调用。
+桌宠官方没有 `/api/move`、`/api/act`、`/api/roam`、`/api/face`、`/api/position` 这些 HTTP 路由（早期会话曾违规自加，重装 Coopanion 后已清除，桌宠回到官方原版）。room 走位一律走「喊 AI」的 `pet_move_to` / `pet_act` 工具。
 
 ---
 
@@ -131,8 +139,7 @@ cortico-world-room/
 3. `syncOverlay()` → `broadcastScene()`：SSE 通知桌面层把电视图切到 `furn-tv-on.png`（静态亮屏）。
 4. `bridgeTv(on, activity, app)`（`world.ts:620-660`）：
    - 算桌宠目标位置 `petX`（电视中心 + `petOffset`，镜像时翻转）；
-   - `POST /api/move {to: petX, run: true}` —— 确定性移动；
-   - `pushEvent({ type:'room.tv', text: ..., }, { trigger:'flush' })` —— 喊 AI 去调 `pet_act` 坐下、`pet_face` 转身。
+   - `pushEvent({ type:'room.tv', text: ..., }, { trigger:'flush' })` —— 喊 AI 调 `pet_move_to` 走过去、`pet_act` 坐下。
 5. 坐下/转身由 AI 决定是否执行。
 6. 看电视期间 `startTvPing()` 每 60 秒问一次「还在看吗」：她调 `room_tv_tick` 续期，或调 `room_tv(on=false)` 自己关；60 秒没有任何心跳则 timer 判定超时，`setTv(false, …, 'timeout')` 自动关电视。
 
@@ -141,7 +148,7 @@ cortico-world-room/
 ### 看书（含心跳）的完整时序
 
 1. 触发：模型调 `room_read(on=true, book)`，或 HTTP `POST /api/read/on`，或面板「开始看书」→ `setRead`。
-2. `setRead` 更新 `state = { slot:'read', read:true, book, until }`；锁定 `bookX` 并 `refreshBookTarget()` 主动读一次桌宠 `startX` 校准书的目标；`syncReadRuntime(true)` 重置 `lastReadTick` 并启动续期检查。
+2. `setRead` 更新 `state = { slot:'read', read:true, book, until }`；同步定 `bookX = readPetX()`（书架坐点，从家具配置推导）并 `movePet(seat)` 做乐观跟踪；`syncReadRuntime(true)` 重置 `lastReadTick` 并启动续期检查。
 3. `syncOverlay()` → SSE：桌面层 `syncBook` 播「书架 → 她面前」的飞书动画（纯视觉，她本人不动）。
 4. `bridgeRead(true, book)` 发 `room.read` 事件：真读 / 读不到就合书 / 每读一段调 `room_read_tick`。
 5. 看书期间 `startReadPing()` 每 60 秒问一次「还在读吗」：
@@ -190,10 +197,75 @@ cortico-world-room/
 1. **改 `world.ts` 后必须重启 Coopanion**：World 热重启不重载 TS 模块，只重建实例。
 2. **改 `dist/webui*.js` 必须换文件名**：`Cache-Control: immutable` 会导致浏览器永不重新请求。
 3. **桌面层传屏号用环境变量 `SCENE_DISPLAY_INDEX`**，不要用 `--display-index` 参数（会被 Chromium 当内部开关消费导致秒崩）。
-4. 验证桌面层连通：`curl http://127.0.0.1:7797/api/move -X POST -H "Content-Type: application/json" -d "{\"to\":0.6,\"run\":true}"` → 桌宠走到屏幕 60% 处。
+4. 验证走位：开电视/去位置后看事件文本是否带 `pet_move_to` 指引（原版桌宠没有 `/api/move` 直连路由，走位靠「喊 AI」）。
 5. 开电视验证：`curl http://127.0.0.1:7798/api/tv -X POST -H "Content-Type: application/json" -d "{\"on\":true,\"activity\":\"看B站\",\"app\":\"bilibili\"}"` → 电视亮起 + 桌宠走到电视旁。**不传 `minutes` 时靠心跳兜底**：60 秒内没有 `room_tv_tick`，timer 会自动关电视——验证时看 `/api/tv` 返回的 `tv` 约 1 分钟后变 `false`。
 6. 开看书验证：`curl http://127.0.0.1:7798/api/read/on -X POST -H "Content-Type: application/json" -d "{\"book\":\"三体\",\"minutes\":30}"` → 桌面书架换成亮灯图 + 暖光，书从书架飞到她面前摊开；`/api/read/off` 恢复灯灭图。**不传 `minutes` 时靠心跳兜底**：开书后 60 秒内没有 `room_read_tick`，timer 会自动合书——验证时看 `/api/read` 返回的 `read` 约 1 分钟后变 `false`。
 7. 改书架位置/大小：改配置 `worlds.room.readX` / `worlds.room.readWidth` / `readFlip` / `readHidden`（x-hot，不用重启），或在设置页「拖动家具」面板里直接拖。
 8. 拖动家具验证：设置页「小房间 → 拖动家具」舞台里应同时看到电视和书架，下方是两行控制项（电视在上、书架在下，两行都有开关按钮：电视「开电视/关电视」、书架「开始看书/合上书」，状态文案分别读 `status` 字段「开着/关着」「在看/空着」）。拖任一件松手后 `curl http://127.0.0.1:7798/api/state` 里对应的 `tvX`/`readX` 应更新。也可直接 `curl http://127.0.0.1:7798/api/furniture/position -X POST -H "Content-Type: application/json" -d "{\"id\":\"read\",\"x\":0.4}"`。
 9. 桌面拖动验证：鼠标移到书架上应出现手型，按住左右拖动 → `/room` 与面板里的 `readX` 同步变化。若只有电视能拖，说明 `scene-host` 没重启（渲染层没上报 `furn-state`），或 `main.js` 的热区还在用电视几何兜底。
 10. 跨屏验证：把书架拖到屏幕最右侧 24px 内 → 整层切到右邻屏，书架落在新屏左边缘（`/api/state` 的 `readX` ≈ 0.05）；再拖到最左 → 切回并落在 0.95 附近。电视行为不变；只有一块屏时原地不动（屏号被 clamp）。
+
+---
+
+## 十、2026-11-03 会话改动记录：书本落点改为确定性坐点（最终：只改 room 自己）
+
+> 现象：第二次开书，书总是飞第一次的坐标。
+> 最终方案（v2）：书的落点不再依赖「她此刻在哪」，改为书架旁的固定坐点。
+> 接手人先读「结论」，再核对文件清单。
+
+### 结论（三层原因，逐层修掉）
+
+1. `bookX` 不随各出口清理/刷新 → 已收敛到各开书/合书路径统一清理，`occupyTool` 与
+   `/api/occupy` 还把清理提前到了 `syncOverlay()` 之前。
+2. 坐标源头是死的（实测坐实）：桌宠 `/api/state` 的 `startX` 来自 `cfg.petX`，而桌宠只在
+   **World stop 时**才把位置写进配置（`savePosition()`）——运行中不随任何移动更新，
+   实测 `POST /api/move` 前后三次读数纹丝不动。
+3. 桌宠运行时的真实位置（宠物页每挪 ≥1px 上报的 standX）只存在于桌宠进程内存，公开 HTTP
+   拿不到；桌宠窗口是全屏宽透明条、本身不动，OS 层查窗口也看不到「人在条里哪里」。
+   **不改桌宠包 = 注定读不到她的实时位置。**（本会话曾在本机给桌宠打过只读路由补丁验证过
+   方案可行，后按 2.1「只改自己」的边界全部回退，桌宠包已恢复原版内容。）
+
+### 最终方案（v2，平台边界内：只改 room 自己）
+
+学家具的做法——家具为什么没这个问题？tvX/readX 是配置值，拖动写回配置，位置永远可知。
+书的落点原来绑在「她此刻在哪」（读不到），现在解绑：
+
+- **开书 = 她走去书架旁的坐点**：room 只做乐观跟踪 `movePet(readPetX())`，真正走过去
+  交给 `bridgeRead` 喊 AI 调 `pet_move_to`（书架位置 + 桌宠身位偏移，全部由配置推导——拖书架，坐点跟着动）；
+- **书的落点 = 那个坐点**：`bookX = readPetX()` 同步确定（不再有异步读坐标的时序窗口），
+  书在坐点等她，她到了就读；
+- 「她不动、书飞过去」的旧设计作废（它要求知道她的实时位置，公开接口给不了）；
+- 坐下（`pet_act` sit）仍走「喊 AI」：`bridgeRead` 的事件里带上坐点位置和坐下请求；
+- 心跳兜底（60 秒内须有 `room_read_tick`）不变。
+
+**遗留边界**：AI 用 `pet_move_to` 挪她、或用户手动拖动她，room 仍无从得知
+（`lastPetX` 只是 room 自己命令过的位置）——但书不再受影响（落点是坐点）。
+若将来想让书跟着她飞到任何位置，需要桌宠侧上游化提供只读位置路由，届时在开书处
+接一个「读她实时位置」的函数即可（v1 的 `refreshBookTarget()` 已删除，需要时重新引入）。
+
+### 改动清单（本会话最终落盘的全部文件，全在 room 包内）
+
+| 文件 | 改动 |
+|---|---|
+| `src/world.ts` | ① `setRead(true)` / `occupyTool` / `/api/occupy` 开书时 `movePet(readPetX())` 并同步定 `bookX`；② 各合书出口清 `bookX`（并提前于 `syncOverlay`）；③ 删除 `alignBook()` / `refreshBookTarget()`；④ `probePetX()` 改为「startX 仅作启动种子、读完自收定时器」；⑤ `bridgeRead` 事件带坐点位置与坐下请求 |
+| `src/decls.ts` | `room_read` 描述改为「她会自己走到书架旁坐下，书从书架飞出来摊在她面前」 |
+| `describe.json` | `node tools/make-describe.mjs` 重新生成（补上此前缺失的 `room.move` 事件） |
+| `data/extensions/node_modules/cortico-world-room/`（junction → `.pnpm` store） | `world.ts` / `describe.json` 整文件复制同步（sha256 一致）。**Coopanion 运行时加载的是这份**；改源码后必须同步再重启 |
+
+### 没有动过的东西（如实记录）
+
+- `resources/app/node_modules/cortico-world-desktop-pet/`——早期会话曾违规加过 `/api/move` 等路由与只读补丁，
+  用户已重装 Coopanion，现确认回到官方原版（无 `/api/move`、`/api/act`、`/api/roam`、`/api/face`、`/api/position`）。
+  本仓库（room）从头到尾只改 `data/` 下的自己，不碰 `resources/`。
+- `data/extensions/node_modules/` 下所有其他 `cortico-world-*` 包、`data/home/companion/worlds/`
+  部署目录、Coopanion 主程序、`data/` 下配置/数据文件——一个都没改。
+
+### 接手注意
+
+1. **重启 Coopanion 生效**（room 启动时经 tsx 加载 TS 源码）。
+2. **改 `src/` 后必须同步安装拷贝再重启**：运行时加载的是 extensions junction 指向的
+   `.pnpm` store 拷贝，不是 `data/room/` 源码目录（本会话实测踩过：只改源码 = 白改）。
+3. 验证闭环：`POST 7798/api/read/on` → SSE 首帧 `book.to` ≈ `readPetX()`（书架坐点），
+   桌宠应自己走过去坐下；`read/off` → 书收回书架；反复开关书，落点永远相同（坐点是确定的）。
+4. 顺带核对：第八节 P1「换屏崩溃」在现实现（轮询 `/api/tv/display` + `setBounds`，不重启
+   进程）下应已规避，待办可降级，未单独验证。

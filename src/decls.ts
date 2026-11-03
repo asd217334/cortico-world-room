@@ -58,7 +58,7 @@ export const ROOM_TOOL_DECLS: ToolSpec[] = [
   },
   {
     name: 'room_read',
-    description: '让她在书架看书（书会自己飞到她面前，她不用走动）。看完了用 room_read(on=false) 合上书。',
+    description: '让她在书架看书：她会自己走到书架旁坐下，书从书架飞出来摊在她面前。看完了用 room_read(on=false) 合上书。',
     parameters: {
       type: 'object',
       properties: {

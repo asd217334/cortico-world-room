@@ -89,9 +89,9 @@ pnpm add cortico-world-room
 
 本包不 import 任何 `cortico-world-*`，只走公开能力：
 
-- **走路**：`POST http://127.0.0.1:7797/api/move {to, run}` —— 桌宠公开 HTTP，确定性；
-- **坐下 / 转身 / 换表情**：通过 `host.pushEvent` 发自然语言，让模型去调桌宠公开的工具名
-  （`pet_act` / `pet_face` / `pet_move_to`）。room 只写工具名，不碰实现。
+- **走路**：通过 `host.pushEvent` 发自然语言，让模型去调桌宠公开工具 `pet_move_to`（原版桌宠没有 `/api/move` 直连 HTTP）；
+- **坐下 / 站起 / 换表情**：通过 `host.pushEvent` 发自然语言，让模型去调桌宠公开的工具名
+  （`pet_act` / `pet_move_to`）。room 只写工具名，不碰实现。
 
 所以「她没坐下」不是 bug，而是这条边界的表现：坐不坐由 AI 决定。换一个桌宠实现，只要它
 提供同名的工具，room 一行都不用改。

@@ -80,18 +80,6 @@ function detectApp(activity: string): string | undefined {
   return undefined
 }
 
-/** 向本地 HTTP 服务发一个 JSON POST；失败静默忽略（桌宠没起或接口不存在时不崩）。 */
-function postJson(url: string, body: unknown): void {
-  const data = JSON.stringify(body)
-  const req = httpRequest(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
-  }, (res) => { res.resume() })
-  req.on('error', () => { /* 忽略：桌宠未启动等情况 */ })
-  req.write(data)
-  req.end()
-}
-
 /** 每个位置摆哪张家具图（放在 src/img 下），空表示不放。
  *  目前只有电视和书架两张精灵进包；书桌 / 沙发 / 床的原图在 design/furniture/，
  *  转成透明精灵并定好锚点后再接进来。 */
@@ -452,8 +440,8 @@ export class RoomWorld implements World {
     // state.json 已经有内容了，这时候拉起桌面层它才能立刻画出来
     this.startOverlay()
 
-    // 跟踪她的位置：桌宠没有实时坐标接口，只能读它记住的 startX（会随移动更新）。
-    // 位置一变就推一次场景，书才会跟着她挪。
+    // 启动种子：桌宠公开接口没有实时坐标（/api/state.startX 只在它 stop 时落盘，运行中是死值）。
+    // 读到一次就停（probePetX 会自己收掉这个定时器）；之后她的位置由 room 自己跟踪（movePet 更新 lastPetX）。
     this.probePetX()
     this.petTimer = setInterval(() => this.probePetX(), 2000)
     this.petTimer.unref?.()
@@ -631,14 +619,20 @@ export class RoomWorld implements World {
           read: slot === 'read',
           book: '',
         }
+        // 离开书架、或新开一场看书：先把旧落点作废再推帧，别把上一次的坐标推出去
+        //（新开书时下面的 read 分支会立刻把 bookX 定到书架坐点，这里只是先兜底清掉）
+        if (slot !== 'read' || !wasRead) this.bookX = undefined
         this.syncOverlay()
         if (slot === 'tv') {
           if (wasRead) { this.bridgeRead(false, ''); this.bookX = undefined }
           this.bridgeTv(true, activity, detectApp(activity))
         } else if (slot === 'read') {
           if (wasTv) this.bridgeTv(false, '发呆')
+          // 去书架=开书：走位和书的落点都用书架坐点；走过去交给 bridgeRead 喊 AI，不猜她的实时位置
+          const seat = this.readPetX()
+          this.movePet(seat)
+          this.bookX = seat
           this.bridgeRead(true, '')
-          this.alignBook(wasRead) // 去书架=开书：现读一次桌宠坐标再让书飞
         } else {
           // 离开书架去做别的（去别的位置/发呆）：把书合上
           if (wasRead) { this.bridgeRead(false, ''); this.bookX = undefined }
@@ -812,9 +806,8 @@ export class RoomWorld implements World {
     this.syncTvRuntime(on)
   }
 
-  /** 电视开关时的联动：
-   *  - 走过去：POST desktop-pet 原生 /api/move（它自带的 HTTP 接口，不改它）→ 确定性。
-   *  - 姿态（坐/转/站）：原生没有 HTTP 接口，发事件让 LLM 调 pet_act / pet_face 补。 */
+  /** 电视开关时的联动：走过去 + 坐/站全走「喊 AI」（pet_move_to / pet_act）。
+   *  原版桌宠没有 /api/move 这类直连 HTTP，也没有 pet_face 工具，room 只发事件文本。 */
   private bridgeTv(on: boolean, activity: string, app?: string): void {
     // 每次联动都重新读电视位置：网页拖过之后也按最新位置走
     const tvX = this.tvX()
@@ -829,11 +822,8 @@ export class RoomWorld implements World {
     let petX = Math.max(0, Math.min(1, tvX + offset - widthShift))
     // 镜像后屏幕朝右，把她关于电视中心左右翻转过去，仍贴在外侧一个身位
     if (this.tvFlip()) petX = Math.max(0, Math.min(1, 2 * tvX - petX))
-    // 她在电视左边就朝右(1)，在右边朝左(-1)
-    const facing = petX < tvX ? 1 : -1
-
     if (on) {
-      // 用 desktop-pet 原生的 /api/move 确定性地让她走过去（她若正坐着，walk 会被忽略，交给下面 LLM 兜底）
+      // 只做乐观跟踪（lastPetX）：真正走过去交给下面事件文本喊 AI 调 pet_move_to
       this.movePet(petX)
     }
 
@@ -841,7 +831,7 @@ export class RoomWorld implements World {
     if (!host?.pushEvent) return
 
     const petPart = on
-      ? `请让桌宠走到电视旁边：如果她还坐着没动，先 pet_act({ actions: ["stand"] }) 再 pet_move_to({ to: ${petX.toFixed(3)}, run: true })；等她到位后 pet_act({ actions: ["sit"] }) 坐下、pet_face({ facing: ${facing} }) 面朝电视。`
+      ? `请让桌宠走到电视旁边：如果她还坐着没动，先 pet_act({ actions: ["stand"] }) 再 pet_move_to({ to: ${petX.toFixed(3)}, run: true })；等她到位后 pet_act({ actions: ["sit"] }) 坐下。`
       : `请让桌宠 pet_act({ actions: ["stand"] }) 站起来（不用移动位置，也不用回中间）。`
 
     // 只给行为约束：装没装视频插件、要不要开，Agent 自己最清楚，
@@ -897,8 +887,13 @@ export class RoomWorld implements World {
       this.bookX = undefined
       this.syncOverlay()
     } else {
-      // 每次开书都现读一次桌宠坐标（已在看 = 只改落点不重飞），读到才让书飞
-      this.alignBook(wasRead)
+      // 开书：书的落点 = 书架旁的坐点（从家具配置推导，拖书架坐点和书一起动）。
+      // 走过去交给 bridgeRead 喊 AI（pet_move_to），room 不直连桌宠；
+      // 桌宠没有实时坐标接口（startX 只在它 stop 时落盘），猜只能猜错。
+      const seat = this.readPetX()
+      this.movePet(seat)
+      this.bookX = seat
+      this.syncOverlay()
     }
     // 看书和看电视互斥：开始看书前先把电视收掉（她站起来不回中间）
     if (on && wasTv) {
@@ -911,26 +906,15 @@ export class RoomWorld implements World {
     this.syncReadRuntime(on)
   }
 
-  /** 开书时把书的落点对齐到她此刻的位置：现读一次桌宠坐标（startX），读到才让书飞。
-   *  wasReading：调用前是否已在看书——是则只改落点不重飞；否则先把 bookX 清空，
-   *  等拿到新坐标再推场景，避免书沿用上一次的旧坐标飞出去。 */
-  private alignBook(wasReading: boolean): void {
-    if (!wasReading) this.bookX = undefined
-    void this.refreshBookTarget().then((x) => {
-      if (!this.state.read) return // 读坐标的功夫她已经合书了
-      this.bookX = x ?? this.bookX ?? this.petXGuess()
-      this.syncOverlay()
-    })
-  }
-
-  /** 看书开始/停止时的事件：只陈述事实 + 插件提示，不要求她走动或坐下。
-   *  书由房间自己飞过去（sceneJson 的 book），room 从不碰别的插件的实现。 */
+  /** 看书开始/停止时的事件。走到书架坐点（pet_move_to）+ 坐下（pet_act）都喊 AI 补，
+   *  读不读、读什么也是她自己的事。书由房间自己送到坐点（sceneJson 的 book），
+   *  room 从不碰别的插件的实现。 */
   private bridgeRead(on: boolean, book: string): void {
     const host = this.host
     if (!host?.pushEvent) return
 
     const text = on
-      ? `她在房间看书${book ? `（读的是《${book}》）` : ''}。请真的打开这本书读：有能看小说/读书/听书的插件就用它打开，或联网（浏览器、网页）查到内容来读；每读一段就调 room_read_tick 报个进度续期，读不到或不想读就调 room_read(on=false) 合上书关掉，不要保持「看书」的假状态装样子。`
+      ? `她在书架旁坐下看书${book ? `（读的是《${book}》）` : ''}——书已经送到书架旁的坐点（横向约 ${(this.readPetX() * 100).toFixed(0)}%）；请让桌宠走过去坐下：如果她正坐着，先 pet_act({ actions: ["stand"] })，再 pet_move_to({ to: ${this.readPetX().toFixed(3)}, run: true })，到位后 pet_act({ actions: ["sit"] })。请真的打开这本书读：有能看小说/读书/听书的插件就用它打开，或联网（浏览器、网页）查到内容来读；每读一段就调 room_read_tick 报个进度续期，读不到或不想读就调 room_read(on=false) 合上书关掉，不要保持「看书」的假状态装样子。`
       : '她在房间合上书，不看了'
 
     void host.pushEvent({
@@ -1216,18 +1200,16 @@ export class RoomWorld implements World {
     return Math.max(0, Math.min(1, readX + offset - widthShift))
   }
 
-  /** 只让桌宠走过去：桌宠原生 POST /api/move（确定性，不喊 AI）。 */
+  /** 记下「她该走到哪」：原版桌宠没有 /api/move 这类直连 HTTP 路由，真正走过去靠
+   *  下面各 bridge* 事件文本喊 AI 调 pet_move_to。这里只更新 lastPetX，当「她应该在的位置」
+   *  给书/电视的落点当可跟踪坐标（AI 不执行时就是乐观估计）。 */
   private movePet(petX: number): void {
-    const target = Math.max(0, Math.min(1, petX))
-    this.lastPetX = target
-    const petBase = `http://127.0.0.1:${this.opts.cfg.petPort || 7797}`
-    postJson(`${petBase}/api/move`, { to: target, run: true })
+    this.lastPetX = Math.max(0, Math.min(1, petX))
   }
 
-  /** 去房间里的普通位置（书桌/沙发/窗边/床/中间）：
-   *  - 走过去：桌宠原生 POST /api/move → 确定性，不会「触发了却不动」；
-   *  - 姿态（坐/站）：原生没有 HTTP，发事件让 LLM 调 pet_act 补——room 只写工具名，不碰实现。
-   *  目标点按她自己的半身宽夹在屏内，避免半个身子出屏。 */
+  /** 去房间里的普通位置（书桌/沙发/窗边/床/中间）：走过去 + 坐/站全走「喊 AI」。
+   *  room 只发事件文本（pet_move_to / pet_act），不直连桌宠；目标点按她自己的半身宽
+   *  夹在屏内，避免半个身子出屏。 */
   private bridgeMove(slot: SlotDef, activity: string): void {
     const rawWidth = Number(this.opts.cfg.petWidth)
     const petWidth = Number.isFinite(rawWidth) && rawWidth > 0 ? rawWidth : 0.09
@@ -1251,64 +1233,34 @@ export class RoomWorld implements World {
   }
 
   /** 她此刻大概在哪：room 记的最后位置；不知道就退回书架旁边。
-   *  桌宠只暴露 /api/state（配置）和 POST /api/move，没有实时坐标，所以只能这样估。 */
+   *  桌宠只暴露 /api/state（配置），没有实时坐标，所以只能这样估。 */
   private petXGuess(): number {
     return this.lastPetX !== undefined ? this.lastPetX : this.readPetX()
   }
 
-  /** 读一次桌宠记住的位置（startX）。它没有实时坐标接口，但这个值会随她移动更新；
-   *  变了就推场景，书跟着她挪（每 2 秒轮一次）。 */
+  /** 每 2 秒对一次桌宠的 /api/state。startX 的语义是「只在桌宠 stop 时落盘」，
+   *  运行中不随移动更新——所以它只配当 lastPetX 的启动种子：读到一次就收手，
+   *  之后她的位置由 room 自己跟踪（movePet 更新 lastPetX）。 */
   private probePetX(): void {
+    if (this.lastPetX !== undefined) return // 种子/跟踪已有着落，别让死值 startX 洗掉
     const url = `http://127.0.0.1:${this.opts.cfg.petPort || 7797}/api/state`
     const req = httpRequest(url, { method: 'GET' }, (res) => {
       let data = ''
       res.on('data', (c) => { data += c })
       res.on('end', () => {
         try {
-          const j = JSON.parse(data) as { startX?: number }
-          const x = Number(j.startX)
+          const x = Number((JSON.parse(data) as { startX?: unknown }).startX)
           if (!Number.isFinite(x) || x < 0 || x > 1) return
-          const changed = this.lastPetX === undefined || Math.abs(x - this.lastPetX) > 0.002
-          if (!changed) return
+          if (this.lastPetX !== undefined) return
           this.lastPetX = x
           this.syncOverlay()
+          // 种子到手，轮询的历史使命结束
+          if (this.petTimer) { clearInterval(this.petTimer); this.petTimer = undefined }
         } catch { /* 忽略 */ }
       })
     })
-    req.on('error', () => { /* 桌宠没起就算了 */ })
+    req.on('error', () => { /* 桌宠没起就算了，下一轮再试 */ })
     req.end()
-  }
-
-  /** 每次开书都现读一次桌宠的坐标（startX），给书当落点。
-   *  不用缓存：书飞出去之后再纠正基本回不来，所以第一次就得是对的。
-   *  读不到（桌宠没起/超时/值不合法）resolve undefined，调用方自己兜底。 */
-  private refreshBookTarget(): Promise<number | undefined> {
-    const url = `http://127.0.0.1:${this.opts.cfg.petPort || 7797}/api/state`
-    return new Promise((resolve) => {
-      let done = false
-      const finish = (x?: number) => {
-        if (done) return
-        done = true
-        resolve(x)
-      }
-      const req = httpRequest(url, { method: 'GET' }, (res) => {
-        let data = ''
-        res.on('data', (c) => { data += c })
-        res.on('end', () => {
-          try {
-            const j = JSON.parse(data) as { startX?: number }
-            const x = Number(j.startX)
-            if (!Number.isFinite(x) || x < 0 || x > 1) return finish()
-            this.lastPetX = x
-            finish(x)
-          } catch { finish() }
-        })
-      })
-      req.on('error', () => finish())
-      // 桌宠卡住时别把书一直扣着：半秒读不到就用兜底坐标
-      req.setTimeout(500, () => { req.destroy(); finish() })
-      req.end()
-    })
   }
 
   /** 视频平台映射：配置里的 JSON 优先，否则用内置默认；换插件不用改代码。 */
@@ -1350,11 +1302,11 @@ export class RoomWorld implements World {
     sprites['book-off'] = img(BOOK_CLOSED_IMAGE)
     sprites['book-on'] = img(BOOK_OPEN_IMAGE)
     const book = {
-      // 落点还没读回来（bookX 未定）就先别让书飞：等拿到她此刻的坐标再推 on
+      // bookX 未定（还没开过书/刚合上）就先别让书飞
       on: this.state.read && this.bookX !== undefined,
       /** 书架位置（飞的起点） */
       from: this.readX(),
-      /** 她看书时书停在哪：开始看书时锁定的位置（bookX），拿不到才退回书架旁 */
+      /** 她看书时书停在哪：开书时确定的书架坐点（bookX），异常时退回已知位置 */
       to: this.bookX ?? this.petXGuess(),
       /** 书宽（vw）：约桌宠身高的 2/3，视觉上像捧在手里 */
       width: 6,
@@ -1594,14 +1546,19 @@ export class RoomWorld implements World {
             read: slot === 'read',
             book: '',
           }
+          // 同 occupyTool：先把旧落点作废再推帧，避免把上一次的坐标推出去
+          if (slot !== 'read' || !wasRead) this.bookX = undefined
           this.syncOverlay()
           if (slot === 'tv') {
             if (wasRead) { this.bridgeRead(false, ''); this.bookX = undefined }
             this.bridgeTv(true, activity, detectApp(activity))
           } else if (slot === 'read') {
             if (wasTv) this.bridgeTv(false, '发呆')
+            // 去书架=开书：走位和书的落点都用书架坐点；走过去交给 bridgeRead 喊 AI，不猜她的实时位置
+            const seat = this.readPetX()
+            this.movePet(seat)
+            this.bookX = seat
             this.bridgeRead(true, '')
-            this.alignBook(wasRead) // 去书架=开书：现读一次桌宠坐标再让书飞
           } else {
             if (wasRead) { this.bridgeRead(false, ''); this.bookX = undefined }
             if (prevSlot !== slot) this.bridgeMove(def, activity)
