@@ -7,6 +7,7 @@
   const read = document.getElementById('read')
   const hud = document.getElementById('hud')
   const screenBtn = document.getElementById('screenBtn')
+  const spots = document.getElementById('spots')
 
   const LABEL = {
     bed: '床', desk: '书桌', sofa: '沙发', window: '窗边', tv: '电视前', floor: '房间中间', read: '书架',
@@ -17,6 +18,8 @@
   let moved = false
   let startX = 0
   let saveTimer = 0
+  let slots = []
+  let spotsSig = ''
 
   function esc(v) {
     return String(v == null ? '' : v).replace(/[&<>"']/g, (c) =>

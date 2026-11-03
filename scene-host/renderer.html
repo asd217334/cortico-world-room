@@ -289,7 +289,7 @@ function glowBox(cls, l, t, r, b) {
 // 位置全部来自 world 的 scene.book：from = 书架 x，to = 她该坐的位置。
 const BOOK_BOTTOM_VW = 9        // 书浮在她面前的高度
 const BOOK_HOME_BOTTOM_VW = 4.6 // 书架中层的起点高度
-const bookFx = { el: null, on: false, reading: false, settled: false, homeX: 0.55, timers: [], sprites: {} }
+const bookFx = { el: null, on: false, reading: false, settled: false, homeX: 0.55, target: 0.55, timers: [], sprites: {} }
 const bookClear = () => { bookFx.timers.forEach(clearTimeout); bookFx.timers = [] }
 const bookLater = (fn, ms) => bookFx.timers.push(setTimeout(fn, ms))
 
@@ -333,7 +333,8 @@ function bookShow(b) {
   el.style.left = ((Number(b.from) || 0.55) * 100).toFixed(3) + '%'
   el.style.bottom = BOOK_HOME_BOTTOM_VW + 'vw'
 
-  const to = Number.isFinite(Number(b.to)) ? Number(b.to) : Number(b.from) || 0.55
+  // 落点存到 bookFx.target：飞行途中来新坐标时只改 target，最终落位以它为准
+  bookFx.target = Number.isFinite(Number(b.to)) ? Number(b.to) : Number(b.from) || 0.55
 
   requestAnimationFrame(() => {
     el.style.transition = 'opacity .18s ease'
@@ -341,7 +342,7 @@ function bookShow(b) {
     requestAnimationFrame(() => {
       const ease = 'cubic-bezier(.22,.9,.28,1.16)'
       el.style.transition = `left .6s ${ease}, bottom .6s ${ease}, transform .6s ${ease}`
-      el.style.left = (to * 100).toFixed(3) + '%'
+      el.style.left = (bookFx.target * 100).toFixed(3) + '%'
       el.style.bottom = BOOK_BOTTOM_VW + 'vw'
       el.style.transform = 'scale(1) rotate(-4deg)'
     })
@@ -352,7 +353,7 @@ function bookShow(b) {
   bookLater(() => el.classList.add('flat'), 1080)
   bookLater(() => {
     el.style.transition = 'none'
-    el.style.left = (to * 100).toFixed(3) + '%'
+    el.style.left = (bookFx.target * 100).toFixed(3) + '%'
     el.style.bottom = BOOK_BOTTOM_VW + 'vw'
     el.style.transform = 'none'
     el.classList.add('floating')
@@ -376,14 +377,16 @@ function bookHide() {
   el.style.opacity = '0'
 }
 
-/** 她换位置（拖家具 / 换坐点）时，书平滑跟过去。 */
+/** 她换位置（拖家具 / 换坐点）时，书平滑跟过去。
+ *  落点以最新一帧为准：坐标是开书时现读的，飞行途中也可能后到，别让旧目标把它钉住。 */
 function bookFollow(b) {
   const el = bookFx.el
-  // 开场动画（飞行/摊开）还没走完就别插队，否则会打断过渡
-  if (!el || !bookFx.on || !bookFx.settled) return
+  if (!el || !bookFx.on) return
   const to = Number(b.to)
   if (!Number.isFinite(to)) return
-  el.style.transition = 'left .55s ease'
+  bookFx.target = to
+  // 开场飞行还没走完时别改过渡，只换目标；落定后跟随才用短过渡
+  if (bookFx.settled) el.style.transition = 'left .55s ease'
   el.style.left = (to * 100).toFixed(3) + '%'
 }
 

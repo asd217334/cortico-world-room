@@ -12,6 +12,7 @@ export const ROOM_TOOL_DECLS: ToolSpec[] = [
     name: 'room_occupy',
     description:
       '告诉她去房间里某个位置做某件事。座位：desk(书桌) / sofa(沙发) / window(窗边) / bed(床) / floor(房间中间) / tv(电视前) / read(书架)。'
+      + '她会自己走过去（desk/sofa/window/bed/floor 走位确定，姿势由她自己决定）。'
       + '去 tv 会自动把电视打开，去 read 会开始看书。做完了用 room_release 让她回中间发呆。',
     parameters: {
       type: 'object',
@@ -119,4 +120,5 @@ export const TOOL_SUMMARIES = {
 export const ROOM_EVENTS: EventDescribe[] = [
   { type: 'room.tv', description: '她在房间看电视；带视频平台时请调用可用的视频插件播放。', trigger: 'flush' },
   { type: 'room.read', description: '她在房间看书；有读书/听书插件时请打开对应书籍。', trigger: 'flush' },
+  { type: 'room.move', description: '她正走去房间里的某个位置（书桌/沙发/窗边/床/中间），走位已确定，请补上坐下/站着的动作。', trigger: 'flush' },
 ]

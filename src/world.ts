@@ -389,7 +389,8 @@ export class RoomWorld implements World {
   /** 她自己最后所在的横向位置（0~1）：room 发起的移动会更新；
    *  启动时问一次桌宠的 /api/state.startX 当初值（它没有实时坐标接口）。 */
   private lastPetX?: number
-  /** 看书时书停在哪：开始看书那一下读一次她的位置，之后她走动不再跟着变。 */
+  /** 看书时书停在哪：每次开书都现读一次她的位置，之后她走动不再跟着变。
+   *  未定（undefined）= 还没读到，这一轮不让书飞出去。 */
   private bookX?: number
   /** 最后一次「还在看书」的信号时间：她每调一次 room_read_tick 或任何 room 工具都刷新。
    *  超过 READ_TICK_TIMEOUT_MS 没刷新，就判定她没在真读，自动合书。 */
@@ -614,6 +615,7 @@ export class RoomWorld implements World {
         if (!def) return { text: `没有这个位置：${slot}。可选：${SLOTS.map((s) => s.id).join(' / ')}`, failed: true }
         const activity = String(args.activity ?? '').trim() || '发呆'
         const minutes = Number(args.minutes)
+        const prevSlot = this.state.slot
         const wasTv = this.state.tv
         const wasRead = this.state.read
         this.state = {
@@ -631,14 +633,17 @@ export class RoomWorld implements World {
         }
         this.syncOverlay()
         if (slot === 'tv') {
-          if (wasRead) this.bridgeRead(false, '')
+          if (wasRead) { this.bridgeRead(false, ''); this.bookX = undefined }
           this.bridgeTv(true, activity, detectApp(activity))
         } else if (slot === 'read') {
           if (wasTv) this.bridgeTv(false, '发呆')
           this.bridgeRead(true, '')
-        } else if (wasRead) {
+          this.alignBook(wasRead) // 去书架=开书：现读一次桌宠坐标再让书飞
+        } else {
           // 离开书架去做别的（去别的位置/发呆）：把书合上
-          this.bridgeRead(false, '')
+          if (wasRead) { this.bridgeRead(false, ''); this.bookX = undefined }
+          // 位置变了才喊：重复 occupy 同一个位置不重复走动（拖电视会反复触发，别再叠一条）
+          if (prevSlot !== slot) this.bridgeMove(def, activity)
         }
         // 心跳/续期检查跟着看书、看电视状态走（不管从工具、HTTP 还是面板进来的）
         this.syncReadRuntime(slot === 'read')
@@ -748,6 +753,8 @@ export class RoomWorld implements World {
       read: false,
       book: '',
     }
+    // 结束看书时清掉书的落点，下次开书重新现读坐标
+    this.bookX = undefined
     this.syncOverlay()
     // 只有真的开着电视 / 真的在看书时才喊话，避免一次动作连发多条事件
     if (wasTv) this.bridgeTv(false, '发呆')
@@ -761,6 +768,8 @@ export class RoomWorld implements World {
   private setTv(on: boolean, activity?: string, minutes?: number, owner = 'http', app?: string): void {
     const wasRead = this.state.read
     const wasTv = this.state.tv
+    // 开电视会把她从书架拉走、合上书：清掉书的落点
+    if (on && wasRead) this.bookX = undefined
     if (on) {
       const act = String(activity ?? '').trim() || '看视频'
       const mins = Number(minutes)
@@ -883,11 +892,14 @@ export class RoomWorld implements World {
         book: '',
       }
     }
-    // 书只飞一次：开始看书那一下锁定她的当前位置，之后她走动不跟着变
-    this.bookX = on ? this.petXGuess() : undefined
-    // 主动再读一次桌宠当前记住的位置，能读到就校准书的目标（读不到保持兜底值）
-    if (on) this.refreshBookTarget()
-    this.syncOverlay()
+    if (!on) {
+      // 合书：落点作废，立刻推一帧让桌面层把书收回书架
+      this.bookX = undefined
+      this.syncOverlay()
+    } else {
+      // 每次开书都现读一次桌宠坐标（已在看 = 只改落点不重飞），读到才让书飞
+      this.alignBook(wasRead)
+    }
     // 看书和看电视互斥：开始看书前先把电视收掉（她站起来不回中间）
     if (on && wasTv) {
       this.bridgeTv(false, '发呆')
@@ -897,6 +909,18 @@ export class RoomWorld implements World {
     if (on !== wasRead) this.bridgeRead(on, on ? bk : '')
     // 看书期间定期续期检查；合书就停掉（同时重置心跳起点，避免刚开书就被判超时）
     this.syncReadRuntime(on)
+  }
+
+  /** 开书时把书的落点对齐到她此刻的位置：现读一次桌宠坐标（startX），读到才让书飞。
+   *  wasReading：调用前是否已在看书——是则只改落点不重飞；否则先把 bookX 清空，
+   *  等拿到新坐标再推场景，避免书沿用上一次的旧坐标飞出去。 */
+  private alignBook(wasReading: boolean): void {
+    if (!wasReading) this.bookX = undefined
+    void this.refreshBookTarget().then((x) => {
+      if (!this.state.read) return // 读坐标的功夫她已经合书了
+      this.bookX = x ?? this.bookX ?? this.petXGuess()
+      this.syncOverlay()
+    })
   }
 
   /** 看书开始/停止时的事件：只陈述事实 + 插件提示，不要求她走动或坐下。
@@ -1200,6 +1224,32 @@ export class RoomWorld implements World {
     postJson(`${petBase}/api/move`, { to: target, run: true })
   }
 
+  /** 去房间里的普通位置（书桌/沙发/窗边/床/中间）：
+   *  - 走过去：桌宠原生 POST /api/move → 确定性，不会「触发了却不动」；
+   *  - 姿态（坐/站）：原生没有 HTTP，发事件让 LLM 调 pet_act 补——room 只写工具名，不碰实现。
+   *  目标点按她自己的半身宽夹在屏内，避免半个身子出屏。 */
+  private bridgeMove(slot: SlotDef, activity: string): void {
+    const rawWidth = Number(this.opts.cfg.petWidth)
+    const petWidth = Number.isFinite(rawWidth) && rawWidth > 0 ? rawWidth : 0.09
+    const to = Math.max(petWidth / 2, Math.min(1 - petWidth / 2, slot.x))
+    this.movePet(to)
+
+    const host = this.host
+    if (!host?.pushEvent) return
+    // 能坐的地方请她坐下；窗边、房间中间站着。桌宠词表只有 sit / stand，
+    // 换成没有动作词的立绘（deepseek）时这句会被静默丢掉，属能力边界，不是 bug。
+    const pose = slot.id === 'window' || slot.id === 'floor' ? 'stand' : 'sit'
+    void host.pushEvent({
+      type: 'room.move',
+      ts: nowIso(this.opts.timezone),
+      source: this.id,
+      text: `她走去房间的「${slot.label}」${activity ? `，准备${activity}` : ''}。`
+        + `请让桌宠停在屏幕横向 ${(to * 100).toFixed(0)}% 的位置`
+        + `（如果正坐着，先 pet_act({ actions: ["stand"] }) 再 pet_move_to({ to: ${to.toFixed(3)}, run: true })），`
+        + `到位后 pet_act({ actions: ["${pose}"] })。`,
+    }, { trigger: 'flush' })
+  }
+
   /** 她此刻大概在哪：room 记的最后位置；不知道就退回书架旁边。
    *  桌宠只暴露 /api/state（配置）和 POST /api/move，没有实时坐标，所以只能这样估。 */
   private petXGuess(): number {
@@ -1229,26 +1279,36 @@ export class RoomWorld implements World {
     req.end()
   }
 
-  /** 开书时主动读一次桌宠记住的位置（startX），让书第一次就飞到贴近她的地方。
-   *  桌宠没有实时坐标，startX 是最接近可得的值；读不到就保持 bookX 的兜底值不变。 */
-  private refreshBookTarget(): void {
+  /** 每次开书都现读一次桌宠的坐标（startX），给书当落点。
+   *  不用缓存：书飞出去之后再纠正基本回不来，所以第一次就得是对的。
+   *  读不到（桌宠没起/超时/值不合法）resolve undefined，调用方自己兜底。 */
+  private refreshBookTarget(): Promise<number | undefined> {
     const url = `http://127.0.0.1:${this.opts.cfg.petPort || 7797}/api/state`
-    const req = httpRequest(url, { method: 'GET' }, (res) => {
-      let data = ''
-      res.on('data', (c) => { data += c })
-      res.on('end', () => {
-        try {
-          const j = JSON.parse(data) as { startX?: number }
-          const x = Number(j.startX)
-          if (!Number.isFinite(x) || x < 0 || x > 1) return
-          this.lastPetX = x
-          this.bookX = x
-          this.syncOverlay()
-        } catch { /* 忽略 */ }
+    return new Promise((resolve) => {
+      let done = false
+      const finish = (x?: number) => {
+        if (done) return
+        done = true
+        resolve(x)
+      }
+      const req = httpRequest(url, { method: 'GET' }, (res) => {
+        let data = ''
+        res.on('data', (c) => { data += c })
+        res.on('end', () => {
+          try {
+            const j = JSON.parse(data) as { startX?: number }
+            const x = Number(j.startX)
+            if (!Number.isFinite(x) || x < 0 || x > 1) return finish()
+            this.lastPetX = x
+            finish(x)
+          } catch { finish() }
+        })
       })
+      req.on('error', () => finish())
+      // 桌宠卡住时别把书一直扣着：半秒读不到就用兜底坐标
+      req.setTimeout(500, () => { req.destroy(); finish() })
+      req.end()
     })
-    req.on('error', () => { /* 桌宠没起就算了 */ })
-    req.end()
   }
 
   /** 视频平台映射：配置里的 JSON 优先，否则用内置默认；换插件不用改代码。 */
@@ -1290,7 +1350,8 @@ export class RoomWorld implements World {
     sprites['book-off'] = img(BOOK_CLOSED_IMAGE)
     sprites['book-on'] = img(BOOK_OPEN_IMAGE)
     const book = {
-      on: this.state.read,
+      // 落点还没读回来（bookX 未定）就先别让书飞：等拿到她此刻的坐标再推 on
+      on: this.state.read && this.bookX !== undefined,
       /** 书架位置（飞的起点） */
       from: this.readX(),
       /** 她看书时书停在哪：开始看书时锁定的位置（bookX），拿不到才退回书架旁 */
@@ -1517,6 +1578,7 @@ export class RoomWorld implements World {
           if (!def) return this.send(res, 400, 'application/json', '{"error":"bad slot"}')
           const activity = String(j.activity ?? '发呆')
           const minutes = Number(j.minutes)
+          const prevSlot = this.state.slot
           const wasRead = this.state.read
           const wasTv = this.state.tv
           this.state = {
@@ -1534,13 +1596,15 @@ export class RoomWorld implements World {
           }
           this.syncOverlay()
           if (slot === 'tv') {
-            if (wasRead) this.bridgeRead(false, '')
+            if (wasRead) { this.bridgeRead(false, ''); this.bookX = undefined }
             this.bridgeTv(true, activity, detectApp(activity))
           } else if (slot === 'read') {
             if (wasTv) this.bridgeTv(false, '发呆')
             this.bridgeRead(true, '')
-          } else if (wasRead) {
-            this.bridgeRead(false, '')
+            this.alignBook(wasRead) // 去书架=开书：现读一次桌宠坐标再让书飞
+          } else {
+            if (wasRead) { this.bridgeRead(false, ''); this.bookX = undefined }
+            if (prevSlot !== slot) this.bridgeMove(def, activity)
           }
           // 心跳/续期检查跟着看书、看电视状态走，避免刚推过去就被超时判定收掉
           this.syncReadRuntime(slot === 'read')
@@ -1642,8 +1706,9 @@ export class RoomWorld implements World {
   <img id="read" src="/bg/furn-read-off.png" alt="书架">
   <img id="tv" src="/bg/furn-tv-off.png" alt="电视">
 </div>
+<div class="spots" id="spots"></div>
 <div class="hud" id="hud"><b>房间中间</b> · 发呆</div>
-<div class="hint">按住电视拖动 · 松手自动保存<br>双击全屏</div>
+<div class="hint">点位置她就自己走过去 · 按住电视拖动<br>双击全屏</div>
 <button class="screen-btn" id="screenBtn" type="button">主屏</button>
 <script>${js}</script>
 </body>
