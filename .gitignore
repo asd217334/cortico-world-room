@@ -1,0 +1,12 @@
+node_modules/
+*.log
+*.tgz
+*.bak
+.DS_Store
+Thumbs.db
+dist/*.map
+
+# 只用于处理外部/草稿图的本地脚本，不入库也不发布
+tools/build-assets.ps1
+tools/import-book-asset.py
+tools/import-read-asset.py

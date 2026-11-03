@@ -1,0 +1,6 @@
+{
+  "tv-off": { "anchor": [0.5, 1.0] },
+  "tv-on": { "anchor": [0.5, 1.0] },
+  "read-off": { "anchor": [0.5, 1.0] },
+  "read-on": { "anchor": [0.5, 1.0] }
+}

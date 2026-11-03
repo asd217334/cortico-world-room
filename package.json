@@ -1,0 +1,65 @@
+{
+  "name": "cortico-world-room",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "description": "小房间：一个有纵深感的桌面房间，她在里面看电视、看书、发呆。别的 World 用 room_occupy 告诉她在干嘛。",
+  "keywords": [
+    "cortico-world"
+  ],
+  "author": "asd217334",
+  "license": "AGPL-3.0-or-later",
+  "homepage": "https://github.com/asd217334/cortico-world-room#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/asd217334/cortico-world-room.git"
+  },
+  "bugs": {
+    "url": "https://github.com/asd217334/cortico-world-room/issues"
+  },
+  "os": [
+    "win32"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "dist",
+    "scene-host",
+    "assets",
+    "describe.json",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "describe": "node tools/make-describe.mjs"
+  },
+  "cortico": {
+    "kind": "world",
+    "api": 6,
+    "displayName": "小房间",
+    "icon": "assets/icon.png",
+    "webUiClient": "dist/webui.js",
+    "describe": "describe.json",
+    "tags": [
+      "companion",
+      "external-setup"
+    ],
+    "locales": {
+      "zh": {
+        "displayName": "小房间",
+        "description": "一个有纵深感的桌面房间：她在里面看电视、看书、发呆。"
+      },
+      "en": {
+        "displayName": "Little Room",
+        "description": "A small desktop room where she watches TV, reads and idles."
+      }
+    }
+  },
+  "devDependencies": {
+    "electron": "^45.1.0"
+  }
+}

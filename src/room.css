@@ -1,0 +1,105 @@
+/* 小房间 · 网页预览（桌面比例版）
+   舞台 = 屏幕宽度，电视按 tvX（0~1）定位，和桌面 scene-host 的比例一致。
+   目前只放电视；床/书桌/沙发等素材做好再接。
+   按住电视可以拖动，松手把位置 POST 回 /api/tv/position。 */
+
+:root { --warm: #ffb066; }
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  font-family: "Microsoft YaHei", system-ui, sans-serif;
+  user-select: none;
+}
+
+/* 预览页给个米色房间底，电视看起来像在房间里 */
+html.preview, body.preview { background: #f3ece0; }
+
+/* 舞台：铺满窗口宽度，米色房间底 */
+#stage {
+  position: fixed;
+  inset: 0;
+  background: linear-gradient(#f8f3e9, #e9ddc9);
+}
+
+/* 电视：透明像素图，按 tvX 定位，可拖 */
+#tv {
+  position: absolute;
+  bottom: 0;
+  left: 80%;
+  width: 12%;
+  transform: translateX(-50%);
+  cursor: grab;
+  -webkit-user-drag: none;
+  touch-action: none;
+  transition: left .12s linear;
+  z-index: 5;
+}
+
+#tv.dragging {
+  cursor: grabbing;
+  transition: none;
+}
+
+/* 阅读角：透明像素占位图，按 readX 定位（不可拖，位置在设置里改） */
+#read {
+  position: absolute;
+  bottom: 0;
+  left: 55%;
+  width: 10.5%;
+  transform: translateX(-50%);
+  -webkit-user-drag: none;
+  transition: left .3s ease;
+  z-index: 4;
+}
+
+/* ── HUD ──────────────────────────────────── */
+.hud {
+  position: absolute;
+  left: 2.2%;
+  top: 2.4%;
+  font-size: clamp(11px, 1.15vw, 16px);
+  letter-spacing: .03em;
+  color: rgba(60, 45, 30, .72);
+  background: rgba(255, 252, 246, .66);
+  padding: .5em 1em;
+  border-radius: 999px;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(120, 95, 65, .16);
+  z-index: 99;
+}
+.hud b { color: #b4691f; font-weight: 600; }
+
+.hint {
+  position: absolute;
+  right: 2.2%;
+  bottom: 2.4%;
+  font-size: clamp(10px, .82vw, 12px);
+  color: rgba(70, 55, 40, .42);
+  text-align: right;
+  line-height: 1.7;
+  z-index: 99;
+  pointer-events: none;
+}
+
+/* 换屏按钮：点一下，桌面层的电视就挪到下一块显示器 */
+.screen-btn {
+  position: absolute;
+  right: 2.2%;
+  top: 2.4%;
+  padding: .45em .95em;
+  border-radius: 999px;
+  border: 1px solid rgba(120, 95, 65, .25);
+  background: rgba(255, 252, 246, .82);
+  color: rgba(60, 45, 30, .82);
+  font-family: inherit;
+  font-size: clamp(10px, .82vw, 13px);
+  cursor: pointer;
+  z-index: 99;
+  backdrop-filter: blur(10px);
+}
+.screen-btn:hover { background: rgba(255, 255, 255, .96); }

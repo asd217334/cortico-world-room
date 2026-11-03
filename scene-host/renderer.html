@@ -1,0 +1,625 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>场景层</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; width: 100%; height: 100%;
+    overflow: hidden; background: transparent;
+    user-select: none;
+  }
+  #stage { position: fixed; inset: 0; }
+
+  .sprite {
+    position: absolute;
+    will-change: left, bottom, width, transform;
+    transition: left .8s cubic-bezier(.4,.05,.2,1),
+                bottom .8s ease, width .8s ease,
+                opacity .4s ease;
+  }
+  .sprite img { width: 100%; display: block; }
+  /* 拖动时不要过渡，跟手 */
+  .sprite.dragging { transition: none; }
+
+  /* ── 电视泛光：外圈柔光洒到电视四周 + 屏幕本体提亮 ── */
+  .tv-glow {
+    position: absolute;
+    pointer-events: none;
+    border-radius: 50%;
+    background:
+      radial-gradient(ellipse 50% 50% at 50% 50%,
+        rgba(190, 235, 255, 0.75) 0%,
+        rgba(130, 205, 255, 0.45) 38%,
+        rgba(80, 160, 255, 0.20) 68%,
+        rgba(40, 110, 255, 0) 100%);
+    mix-blend-mode: screen;
+    filter: blur(6px);
+    animation: tv-breathe 3.4s ease-in-out infinite;
+    will-change: opacity, transform;
+  }
+  .tv-glow-core {
+    position: absolute;
+    pointer-events: none;
+    border-radius: 14%;
+    background:
+      radial-gradient(ellipse 60% 55% at 50% 42%,
+        rgba(200, 240, 255, 0.70) 0%,
+        rgba(140, 210, 255, 0.40) 45%,
+        rgba(90, 160, 255, 0.15) 78%,
+        rgba(40, 110, 255, 0) 100%);
+    mix-blend-mode: screen;
+    filter: blur(1.5px);
+    animation: tv-breathe 3.4s ease-in-out infinite;
+  }
+  @keyframes tv-breathe {
+    0%, 100% { opacity: 0.30; transform: scale(0.90); }
+    50%      { opacity: 1.00; transform: scale(1.10); }
+  }
+
+  /* ── 书：看书时从书架飞出来、摊在她面前（纯视觉层，不接鼠标）── */
+  .book {
+    position: absolute; z-index: 20; pointer-events: none;
+    opacity: 0; will-change: left, bottom, transform, opacity;
+  }
+  .book img { position: absolute; left: 50%; bottom: 0; display: block; }
+  .book .bk-open,
+  .book .bk-half { width: 100%; transform: translateX(-50%); }
+  .book .bk-closed {
+    width: 55%; transform: translateX(-50%);
+    transition: opacity .16s ease;
+  }
+  /* 沿中书脊切成左右两页，先贴在书脊上再向两侧摊开 */
+  .book .bk-half {
+    transform-origin: 50% 50%;
+    transform: translateX(-50%) scaleX(.06);
+    transition: transform .44s cubic-bezier(.22, .9, .28, 1);
+  }
+  .book .bk-left  { clip-path: inset(0 50% 0 0); }
+  .book .bk-right { clip-path: inset(0 0 0 50%); }
+  .book .bk-open {
+    opacity: 0;
+    transition: opacity .16s ease;
+  }
+  .book.unfold .bk-closed { opacity: 0; }
+  .book.open .bk-half { transform: translateX(-50%) scaleX(1); }
+  .book.flat .bk-open { opacity: 1; }
+  .book.flat .bk-half { opacity: 0; }
+
+  @keyframes book-float {
+    0%, 100% { transform: translateY(0) rotate(-1.5deg); }
+    50%      { transform: translateY(-.22vw) rotate(1deg); }
+  }
+  .book.floating { animation: book-float 3.2s ease-in-out infinite; }
+
+  /* ── 电视旁的电源开关（像素风 · 竖置 · 平时半透明，靠近才醒目） ── */
+  .tv-switch {
+    position: absolute;
+    aspect-ratio: 1 / 2.15;
+    border-radius: 0;
+    background: #2e2e36;
+    /* 像素凹槽：左上暗、右下亮 + 外描边 + 硬边投影 */
+    box-shadow:
+      inset 2px 2px 0 0 #14141a,
+      inset -2px -2px 0 0 #5a5a64,
+      0 0 0 2px #121216,
+      3px 3px 0 0 rgba(0, 0, 0, 0.45);
+    cursor: pointer;
+    z-index: 11;
+    opacity: 0.1;
+    transition: left .8s ease, bottom .8s ease, opacity .25s ease,
+                width .8s ease, height .8s ease;
+  }
+  .tv-switch:hover,
+  .tv-switch.hot { opacity: 0.95; }
+  /* 开：白底座发光（高对比） */
+  .tv-switch.on {
+    background: #f4f4f4;
+    box-shadow:
+      inset 2px 2px 0 0 #b0b0b8,
+      inset -2px -2px 0 0 #ffffff,
+      0 0 0 2px #121216,
+      0 0 12px 2px rgba(255, 255, 255, 0.5);
+  }
+  .tv-switch.dragging { transition: none; }
+  .tv-switch .knob {
+    position: absolute;
+    left: 50%;
+    bottom: 6%;
+    width: 72%;
+    aspect-ratio: 1;
+    border-radius: 0;
+    background: #c8c8d0;
+    /* 像素凸起：左上亮、右下暗 + 外描边 */
+    box-shadow:
+      inset 2px 2px 0 0 #e6e6ee,
+      inset -2px -2px 0 0 #9a9aa4,
+      0 0 0 2px #121216;
+    transform: translateX(-50%);
+    transition: bottom .18s steps(3);
+  }
+  /* 开：深色方块滑到上格 */
+  .tv-switch.on .knob {
+    bottom: 51%;
+    background: #1a1a1e;
+    box-shadow:
+      inset 2px 2px 0 0 #4a4a54,
+      inset -2px -2px 0 0 #0a0a0e,
+      0 0 0 2px #121216;
+  }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<script>
+const fs = require('node:fs')
+const path = require('node:path')
+const { ipcRenderer } = require('electron')
+
+const params = new URLSearchParams(location.search)
+const sceneUrl = params.get('scene') || ''
+const roomBase = sceneUrl ? new URL(sceneUrl).origin : ''
+const stage = document.getElementById('stage')
+
+// 锚点表：每个精灵声明自己的锚点（脚底中心 / 顶部中心 / 正中心……）
+let anchors = {}
+try {
+  anchors = JSON.parse(fs.readFileSync(path.join(__dirname, 'anchors.json'), 'utf8'))
+} catch {}
+
+const nodes = new Map()
+let lastMsg = Date.now()
+
+// 拖动状态：所有家具都能拖（电视额外支持「拖到屏幕边缘换屏」）
+const TV_ID = 'tv'
+// 电视屏幕区域（占 furn-tv-on.png 图片的百分比）。
+// X 来自 world.ts 的 TV_GEOM（屏幕朝左：22.6%~52.4%）；
+// Y 按原图测量：亮屏区约在上 43% ~ 79%。
+const TV_SCREEN = {
+  left: 0.226,
+  right: 0.524,
+  top: 0.43,
+  bottom: 0.79,
+}
+// 外圈泛光往外扩多少（占图片比例，每个方向）。0.30 = 屏幕每边再外扩 30%，
+// 这样光会漫过电视边框、洒到四周。
+const TV_BLOOM_PAD = 0.42
+// 阅读角（书架）不加泛光——没有灯，开关状态靠两张图本身的差异表现
+let dragId = ''        // 正在拖哪件家具（空 = 没在拖）
+let dragEl = null
+let dragMoved = false  // 本次按下后有没有真的移动过（没动 = 单击）
+let dragStartX = 0
+let dragStartLeft = 0
+let tvX = 0.8
+let tvWidth = 9
+let tvHidden = false
+// 拖到屏幕边缘的换屏防抖：-1/1 表示已在左/右边缘触发过，0 表示不在边缘
+let switchLock = 0
+
+// ── 电视旁的电源开关（纯 CSS 新拟态滑动按钮） ──
+let tvFlip = false
+let tvOn = false
+const tvSwitch = document.createElement('div')
+tvSwitch.className = 'tv-switch'
+const knob = document.createElement('div')
+knob.className = 'knob'
+tvSwitch.appendChild(knob)
+stage.appendChild(tvSwitch)
+
+/** 竖置小开关贴在电视外侧，随电视大小缩放；电视镜像（屏幕朝右）时自动换到左边。 */
+function placeSwitch() {
+  const btnH = tvWidth * 0.55 * 0.3  // 竖向开关：窄高，宽度按 1:2.15 反推
+  const btnW = btnH / 2.15
+  const gap = -1.9
+  const side = tvFlip ? -1 : 1
+  tvSwitch.style.width = btnW.toFixed(2) + 'vw'
+  tvSwitch.style.height = btnH.toFixed(2) + 'vw'
+  tvSwitch.style.left = (tvX * 100 + side * (tvWidth / 2 + gap + btnW / 2)).toFixed(2) + '%'
+  tvSwitch.style.bottom = (tvWidth * 0.4).toFixed(2) + 'vw'
+}
+
+/** 把按钮在窗口里的比例矩形发给主进程：鼠标热区判定要用，否则按钮点不到。 */
+function switchRectMsg() {
+  const r = tvSwitch.getBoundingClientRect()
+  const w = stage.clientWidth || window.innerWidth
+  const h = stage.clientHeight || window.innerHeight
+  return { x0: r.left / w, x1: r.right / w, y0: r.top / h, y1: r.bottom / h }
+}
+
+function syncSwitch() {
+  tvSwitch.classList.toggle('on', tvOn)
+  // 非隐藏时清掉内联 opacity，交给 CSS：平时 0.38 半透明，鼠标靠近 hover 提亮
+  tvSwitch.style.opacity = tvHidden ? '0' : ''
+  tvSwitch.style.pointerEvents = tvHidden ? 'none' : 'auto'
+  placeSwitch()
+  reportRects()
+}
+
+/** 把每件家具在窗口里的矩形报给主进程：鼠标热区判定要用。
+ *  不报的话透明层整层穿透，鼠标根本落不到家具上（表现就是「拖不动」）。 */
+function reportRects() {
+  const w = stage.clientWidth || window.innerWidth
+  const h = stage.clientHeight || window.innerHeight
+  const rects = []
+  for (const [id, el] of nodes) {
+    const r = el.getBoundingClientRect()
+    rects.push({
+      id,
+      x0: r.left / w,
+      x1: r.right / w,
+      y0: r.top / h,
+      y1: r.bottom / h,
+      hidden: el.style.opacity === '0',
+    })
+  }
+  ipcRenderer.send('furn-state', { rects, sw: tvHidden ? null : switchRectMsg() })
+}
+
+// 租约：SSE 断流超过 20 秒 → 判定 World 停了 → 自己退出，不留残影
+setInterval(() => {
+  if (Date.now() - lastMsg > 12000) ipcRenderer.send('lease-expired')
+}, 5000)
+
+function place(el, o, spriteName) {
+  const [hx, hy] = (anchors[spriteName] && anchors[spriteName].anchor) || [0.5, 1.0]
+  el.style.left = (o.x * 100).toFixed(2) + '%'
+  el.style.bottom = (o.bottom * 100).toFixed(2) + '%'
+  el.style.width = (o.width || 10).toFixed(2) + 'vw'
+  el.style.zIndex = String(o.layer == null ? 10 : o.layer)
+  el.style.opacity = o.hidden ? '0' : String(o.opacity == null ? 1 : o.opacity)
+  // 让精灵的锚点精确落在 (left, bottom) 定位点上；flip 时水平镜像（屏幕朝向翻转，光斑子层一并跟着走）
+  const flip = o.flip ? ' scaleX(-1)' : ''
+  el.style.transform = `translate(${(-hx * 100).toFixed(2)}%, ${((1 - hy) * 100).toFixed(2)}%)${flip}`
+}
+
+/** 在精灵内部按图片比例铺一层光斑（l/t/r/b 都是 0~1 的图片比例）。 */
+function glowBox(cls, l, t, r, b) {
+  const d = document.createElement('div')
+  d.className = cls
+  d.style.left = (l * 100).toFixed(2) + '%'
+  d.style.top = (t * 100).toFixed(2) + '%'
+  d.style.width = ((r - l) * 100).toFixed(2) + '%'
+  d.style.height = ((b - t) * 100).toFixed(2) + '%'
+  return d
+}
+
+// ── 书：看书 → 从书架飞到她面前摊开；合书 → 收回书架 ──────
+// 位置全部来自 world 的 scene.book：from = 书架 x，to = 她该坐的位置。
+const BOOK_BOTTOM_VW = 9        // 书浮在她面前的高度
+const BOOK_HOME_BOTTOM_VW = 4.6 // 书架中层的起点高度
+const bookFx = { el: null, on: false, reading: false, settled: false, homeX: 0.55, timers: [], sprites: {} }
+const bookClear = () => { bookFx.timers.forEach(clearTimeout); bookFx.timers = [] }
+const bookLater = (fn, ms) => bookFx.timers.push(setTimeout(fn, ms))
+
+function bookEl() {
+  if (bookFx.el) return bookFx.el
+  const el = document.createElement('div')
+  el.className = 'book'
+  // 叠放顺序：摊开图 → 左右两页 → 合上的书（最上层，飞行阶段用）
+  for (const cls of ['bk-open', 'bk-half bk-left', 'bk-half bk-right', 'bk-closed']) {
+    const img = document.createElement('img')
+    img.className = cls
+    img.alt = ''
+    el.appendChild(img)
+  }
+  stage.appendChild(el)
+  bookFx.el = el
+  return el
+}
+
+/** 刷新书本图（图是 world 通过 scene.sprites 给的，渲染层不猜路径）。 */
+function bookPaint(sprites) {
+  if (!sprites) return
+  if (sprites['book-off']) bookFx.sprites.off = sprites['book-off']
+  if (sprites['book-on']) bookFx.sprites.on = sprites['book-on']
+  const el = bookEl()
+  el.querySelector('.bk-closed').src = bookFx.sprites.off || ''
+  for (const img of el.querySelectorAll('.bk-open, .bk-half')) img.src = bookFx.sprites.on || ''
+}
+
+function bookShow(b) {
+  const el = bookEl()
+  bookClear()
+  el.className = 'book'
+  bookFx.settled = false
+  const w = Number(b.width) || 6
+  el.style.width = w + 'vw'
+  el.style.height = (w * 0.65).toFixed(2) + 'vw'
+  el.style.transition = 'none'
+  el.style.opacity = '0'
+  el.style.transform = 'scale(.65)'
+  el.style.left = ((Number(b.from) || 0.55) * 100).toFixed(3) + '%'
+  el.style.bottom = BOOK_HOME_BOTTOM_VW + 'vw'
+
+  const to = Number.isFinite(Number(b.to)) ? Number(b.to) : Number(b.from) || 0.55
+
+  requestAnimationFrame(() => {
+    el.style.transition = 'opacity .18s ease'
+    el.style.opacity = '1'
+    requestAnimationFrame(() => {
+      const ease = 'cubic-bezier(.22,.9,.28,1.16)'
+      el.style.transition = `left .6s ${ease}, bottom .6s ${ease}, transform .6s ${ease}`
+      el.style.left = (to * 100).toFixed(3) + '%'
+      el.style.bottom = BOOK_BOTTOM_VW + 'vw'
+      el.style.transform = 'scale(1) rotate(-4deg)'
+    })
+  })
+
+  bookLater(() => el.classList.add('unfold'), 600)
+  bookLater(() => el.classList.add('open'), 660)
+  bookLater(() => el.classList.add('flat'), 1080)
+  bookLater(() => {
+    el.style.transition = 'none'
+    el.style.left = (to * 100).toFixed(3) + '%'
+    el.style.bottom = BOOK_BOTTOM_VW + 'vw'
+    el.style.transform = 'none'
+    el.classList.add('floating')
+    bookFx.settled = true // 开场结束，之后允许跟随
+  }, 1200)
+}
+
+function bookHide() {
+  const el = bookFx.el
+  if (!el) return
+  bookClear()
+  bookFx.settled = false
+  el.classList.remove('flat', 'floating')
+  bookLater(() => el.classList.remove('open'), 120)
+  bookLater(() => el.classList.remove('unfold'), 520)
+  const ease = 'cubic-bezier(.5,0,.8,.4)'
+  el.style.transition = `left .5s ${ease} .55s, bottom .5s ${ease} .55s, transform .5s ${ease} .55s, opacity .3s ease .85s`
+  el.style.left = (bookFx.homeX * 100).toFixed(3) + '%'
+  el.style.bottom = BOOK_HOME_BOTTOM_VW + 'vw'
+  el.style.transform = 'scale(.65) rotate(4deg)'
+  el.style.opacity = '0'
+}
+
+/** 她换位置（拖家具 / 换坐点）时，书平滑跟过去。 */
+function bookFollow(b) {
+  const el = bookFx.el
+  // 开场动画（飞行/摊开）还没走完就别插队，否则会打断过渡
+  if (!el || !bookFx.on || !bookFx.settled) return
+  const to = Number(b.to)
+  if (!Number.isFinite(to)) return
+  el.style.transition = 'left .55s ease'
+  el.style.left = (to * 100).toFixed(3) + '%'
+}
+
+function syncBook(scene) {
+  const b = scene && scene.book
+  if (!b) return
+  bookPaint(scene.sprites)
+  const on = b.on === true
+  bookFx.reading = on
+  if (on && !bookFx.on) {
+    bookFx.on = true
+    bookFx.homeX = Number.isFinite(Number(b.from)) ? Number(b.from) : 0.55
+    bookShow(b)
+  } else if (!on && bookFx.on) {
+    bookFx.on = false
+    bookHide()
+  } else if (on) {
+    bookFollow(b)
+  }
+}
+
+function render(scene) {
+  if (!scene || !Array.isArray(scene.objects)) return
+  const seen = new Set()
+
+  for (const o of scene.objects) {
+    if (!o || !o.id) continue
+    seen.add(o.id)
+    let el = nodes.get(o.id)
+
+    const src = scene.sprites ? scene.sprites[o.sprite] : ''
+
+    if (!el) {
+      el = document.createElement('div')
+      el.className = 'sprite'
+      const img = document.createElement('img')
+      img.alt = ''
+      el.appendChild(img)
+      stage.appendChild(el)
+      nodes.set(o.id, el)
+    }
+
+    const img = el.firstElementChild
+    if (img && el.dataset.src !== src) {
+      el.dataset.src = src
+      img.src = src || ''
+    }
+
+    // 电视亮屏 → 屏幕提亮 + 四周泛光；关屏 → 移除
+    if (o.id === TV_ID) {
+      const on = o.sprite === 'tv-on'
+      if (on && !el.querySelector('.tv-glow')) {
+        const p = TV_BLOOM_PAD
+        el.appendChild(glowBox('tv-glow',
+          TV_SCREEN.left - p, TV_SCREEN.top - p,
+          TV_SCREEN.right + p, TV_SCREEN.bottom + p))
+        el.appendChild(glowBox('tv-glow-core',
+          TV_SCREEN.left, TV_SCREEN.top,
+          TV_SCREEN.right, TV_SCREEN.bottom))
+      } else if (!on) {
+        for (const g of el.querySelectorAll('.tv-glow, .tv-glow-core')) g.remove()
+      }
+    }
+
+    // 阅读角不加泛光：素材是书架，没有灯；开/关靠两张图本身的差异表现
+
+    // 电视：记住几何给电源开关和换屏用
+    if (o.id === TV_ID) {
+      tvX = o.x
+      tvWidth = o.width || 9
+      tvHidden = !!o.hidden
+      tvFlip = !!o.flip
+      tvOn = o.sprite === 'tv-on'
+    }
+
+    // 正在拖的那件：只同步层级/显隐，位置交给鼠标，别被 SSE 拉回去
+    if (dragId && o.id === dragId) {
+      el.style.zIndex = String(o.layer == null ? 10 : o.layer)
+      continue
+    }
+
+    place(el, o, o.sprite)
+  }
+
+  for (const [id, el] of [...nodes]) {
+    if (!seen.has(id)) { el.remove(); nodes.delete(id) }
+  }
+
+  syncSwitch()
+  syncBook(scene)
+}
+
+// ── 拖动家具（每件都能拖；拖到屏幕边缘都能跨屏）──────────
+stage.addEventListener('mousedown', (e) => {
+  if (e.button !== 0 || !nodes.size) return
+  // 从最上层往下找命中的家具；隐藏（opacity 0）的不参与，免得对着空气拖
+  const ordered = [...nodes.entries()].sort(
+    (a, b) => (Number(b[1].style.zIndex) || 0) - (Number(a[1].style.zIndex) || 0))
+  for (const [id, el] of ordered) {
+    if (el.style.opacity === '0') continue
+    const r = el.getBoundingClientRect()
+    if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) continue
+    dragId = id
+    dragEl = el
+    dragMoved = false
+    switchLock = 0
+    dragStartX = e.clientX
+    dragStartLeft = r.left
+    el.classList.add('dragging')
+    tvSwitch.classList.add('dragging') // 按钮跟手，别带过渡
+    ipcRenderer.send('tv-drag', true)
+    e.preventDefault()
+    return
+  }
+})
+
+window.addEventListener('mousemove', (e) => {
+  if (!dragId || !dragEl) return
+  // 超过 4px 才算拖动，否则松手时按「单击」处理
+  if (Math.abs(e.clientX - dragStartX) > 4) dragMoved = true
+  if (!dragMoved) return
+  const w = dragEl.getBoundingClientRect().width
+  const stageW = stage.clientWidth || window.innerWidth
+  const left = Math.min(Math.max(0, dragStartLeft + (e.clientX - dragStartX)), Math.max(0, stageW - w))
+  const x = (left + w / 2) / stageW
+  dragEl.style.left = (x * 100).toFixed(3) + '%'
+  // 电视顺带更新电源开关的位置；别的家具只需要刷新热区矩形
+  if (dragId === TV_ID) { tvX = x; syncSwitch() } else reportRects()
+
+  // 任何家具拖到屏幕左右边缘 → 切到相邻屏（整层换，两件家具一起过去）
+  const edge = 24
+  if (e.clientX <= edge) {
+    if (switchLock !== -1) { switchLock = -1; doSwitch(-1) }
+  } else if (e.clientX >= stageW - edge) {
+    if (switchLock !== 1) { switchLock = 1; doSwitch(1) }
+  } else {
+    switchLock = 0
+  }
+})
+
+// 拖到屏幕边缘：切到相邻屏，被拖的那件跳到新屏对侧边缘，结束本次拖动（保存新位置）。
+// 换屏是场景级动作：一个透明窗口只铺一块屏，两件家具会一起到新屏上。
+function doSwitch(dir) {
+  ipcRenderer.send('switch-display', dir)
+  const x = dir === 1 ? 0.05 : 0.95
+  if (dragEl) dragEl.style.left = (x * 100).toFixed(3) + '%'
+  // 电源开关是电视专属，只有电视需要顺带刷新
+  if (dragId === TV_ID) { tvX = x; syncSwitch() } else reportRects()
+  dragMoved = true // 换屏算一次真实移动，别被当成单击
+  endDrag()
+}
+
+/** 点一下阅读角（书架）＝ 开始看书 / 合上书。 */
+function toggleReading() {
+  if (!roomBase) return
+  const on = !bookFx.reading
+  fetch(`${roomBase}/api/read/${on ? 'on' : 'off'}`, {
+    method: 'POST',
+    // 用 text/plain 避开跨源预检：这是 file:// 页面，发 JSON 会触发 OPTIONS
+    headers: { 'content-type': 'text/plain' },
+    body: JSON.stringify({ source: 'click' }),
+  }).catch(() => {})
+}
+
+function endDrag() {
+  if (!dragId) return
+  const id = dragId
+  const el = dragEl
+  const moved = dragMoved
+  dragId = ''
+  dragEl = null
+  dragMoved = false
+  if (el) el.classList.remove('dragging')
+  tvSwitch.classList.remove('dragging')
+  ipcRenderer.send('tv-drag', false)
+
+  // 没移动 = 单击：点书架就开/关看书，不写位置
+  if (!moved) {
+    if (id === 'read') toggleReading()
+    reportRects()
+    return
+  }
+
+  // 位置从元素上读：doSwitch 里改过 left，元素才是唯一事实
+  const stageW = stage.clientWidth || window.innerWidth
+  const r = el ? el.getBoundingClientRect() : null
+  const x = r ? (r.left + r.width / 2) / stageW : tvX
+  if (roomBase) {
+    fetch(roomBase + '/api/furniture/position', {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain' },
+      body: JSON.stringify({ id, x }),
+    }).catch(() => {})
+  }
+  reportRects()
+}
+window.addEventListener('mouseup', endDrag)
+window.addEventListener('blur', endDrag)
+
+// ── 电源开关：点一下 = 电视开/关 ──
+tvSwitch.addEventListener('mousedown', (e) => e.stopPropagation())
+tvSwitch.addEventListener('click', (e) => {
+  e.stopPropagation()
+  const want = !tvOn
+  tvSwitch.classList.toggle('on', want) // 先拨过去，反馈快；SSE 回来再校准
+  if (roomBase) {
+    fetch(roomBase + '/api/tv', {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain' },
+      body: JSON.stringify({ on: want, source: 'switch' }),
+    }).catch(() => {})
+  }
+})
+
+// 鼠标靠近家具 → 显示手型 + 电视开关亮起（到电视就亮，不用精确移到开关上）；离开恢复
+ipcRenderer.on('cursor-hot', (_e, on) => {
+  document.body.style.cursor = on ? 'grab' : ''
+  tvSwitch.classList.toggle('hot', !!on)
+})
+
+function connect() {
+  if (!sceneUrl) return
+  const es = new EventSource(sceneUrl)
+  es.onopen = () => { lastMsg = Date.now() }
+  es.onmessage = (e) => {
+    lastMsg = Date.now()
+    try { render(JSON.parse(e.data)) } catch {}
+  }
+  // 报错就主动断开重建：EventSource 对「半开」连接不会自动重连（onerror 都不触发），
+  // 挂久了（睡眠唤醒等）SSE 变成黑洞，与其干等 12 秒租约退出重启，不如立刻重连。
+  es.onerror = () => {
+    try { es.close() } catch {}
+    setTimeout(connect, 2000)
+  }
+}
+connect()
+</script>
+</body>
+</html>

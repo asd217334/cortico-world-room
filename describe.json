@@ -1,0 +1,193 @@
+{
+  "tools": [
+    {
+      "name": "room_occupy",
+      "description": "告诉她去房间里某个位置做某件事。座位：desk(书桌) / sofa(沙发) / window(窗边) / bed(床) / floor(房间中间) / tv(电视前) / read(书架)。去 tv 会自动把电视打开，去 read 会开始看书。做完了用 room_release 让她回中间发呆。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "slot": {
+            "type": "string",
+            "enum": [
+              "desk",
+              "sofa",
+              "window",
+              "bed",
+              "floor",
+              "tv",
+              "read"
+            ],
+            "description": "去哪"
+          },
+          "activity": {
+            "type": "string",
+            "description": "在那做什么，例：画图、看书、看视频、听课、发呆"
+          },
+          "minutes": {
+            "type": "number",
+            "description": "大概要多久（分钟），到点自动回中间发呆（可选）"
+          }
+        },
+        "required": [
+          "slot",
+          "activity"
+        ],
+        "additionalProperties": false
+      },
+      "tags": [
+        "act"
+      ],
+      "summary": "让她去房间某个位置做某件事。"
+    },
+    {
+      "name": "room_tv",
+      "description": "开/关房间里的电视。开的时候她会坐到电视前看；关掉她就回中间发呆。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "on": {
+            "type": "boolean",
+            "description": "true 打开，false 关掉"
+          },
+          "activity": {
+            "type": "string",
+            "description": "打开时在做什么，默认\"看视频\"（可选）"
+          },
+          "minutes": {
+            "type": "number",
+            "description": "看多久（分钟），到点自动关掉（可选）"
+          },
+          "app": {
+            "type": "string",
+            "enum": [
+              "bilibili",
+              "douyin"
+            ],
+            "description": "对接的市场视频插件：bilibili(看B站) / douyin(看抖音)，不填表示普通看电视（可选）"
+          }
+        },
+        "required": [
+          "on"
+        ],
+        "additionalProperties": false
+      },
+      "tags": [
+        "act",
+        "x-hot"
+      ],
+      "summary": "开/关房间里的电视。"
+    },
+    {
+      "name": "room_tv_tick",
+      "description": "看电视时的心跳：她每看一会儿/每次还在继续看，就报一下当前在看什么。room 据此判定她是否还在看；超过 1 分钟没报就会自动关电视。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "string",
+            "description": "正在看的内容（可选）"
+          }
+        },
+        "additionalProperties": false
+      },
+      "tags": [
+        "act"
+      ],
+      "summary": "看电视心跳：报一下正在看什么，续期避免电视被自动关掉。"
+    },
+    {
+      "name": "room_read",
+      "description": "让她在书架看书（书会自己飞到她面前，她不用走动）。看完了用 room_read(on=false) 合上书。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "on": {
+            "type": "boolean",
+            "description": "true 开始看书，false 合上书"
+          },
+          "book": {
+            "type": "string",
+            "description": "看的书名/内容（可选）"
+          },
+          "minutes": {
+            "type": "number",
+            "description": "大概看多久（分钟），到点自动合上书（可选）"
+          }
+        },
+        "required": [
+          "on"
+        ],
+        "additionalProperties": false
+      },
+      "tags": [
+        "act",
+        "x-hot"
+      ],
+      "summary": "让她在书架看书/合上书。"
+    },
+    {
+      "name": "room_read_tick",
+      "description": "看书时的心跳：她每读一段/每次还在继续读，就报一次读到的内容或进度。room 据此判定她是否还在真读；超过 1 分钟没报就会自动合书。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "string",
+            "description": "读到的内容摘要或进度（可选）"
+          }
+        },
+        "additionalProperties": false
+      },
+      "tags": [
+        "act"
+      ],
+      "summary": "看书心跳：报一次读到的内容/进度，续期避免自动合书。"
+    },
+    {
+      "name": "room_release",
+      "description": "让她把手头的事放下，回房间中间发呆。",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "tags": [
+        "act"
+      ],
+      "summary": "让她回中间发呆。"
+    },
+    {
+      "name": "room_state",
+      "description": "看看她现在在房间里做什么。",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "tags": [
+        "read"
+      ],
+      "summary": "看她在房间做什么。"
+    }
+  ],
+  "events": [
+    {
+      "type": "room.tv",
+      "description": "她在房间看电视；带视频平台时请调用可用的视频插件播放。",
+      "trigger": "flush"
+    },
+    {
+      "type": "room.read",
+      "description": "她在房间看书；有读书/听书插件时请打开对应书籍。",
+      "trigger": "flush"
+    }
+  ],
+  "prompts": [
+    {
+      "key": "worlds.room.behavior",
+      "title": "小房间 · 行为",
+      "role": "envPrompt",
+      "content": "# 小房间\r\n\r\n她在小房间里生活，房间里有电视（横向约 {{room.tvPos}}）和一个书架（横向约 {{room.shelfPos}}），光线{{room.theme}}。她现在：**{{room.now}}**。房间页面：{{room.url}}\r\n\r\n## 看电视，看书是她自己的事，和真人一样自主\r\n\r\n- 开着电视，看书不等于必须一直盯着：她可以走开、去画画、发呆，电视照常播着。\r\n- 觉得不好看、看完了，就自己关掉（调用 `room_tv(on=false)`），不用请示主人。\r\n- 想看什么、看多久，都由她自己决定。\r\n- 也不要每次开关电视，看书都请示。\r\n- 看电视也要报心跳：每看一会儿、或还打算继续看，就调 `room_tv_tick(note=\"正在看的内容\")` 续期；**超过 1 分钟不报，room 会认为你没在看了，自动把电视关掉**。不想看/看完了就自己 `room_tv(on=false)` 关掉。\r\n- 看电视和看书互斥：开电视会自动结束看书，开始看书也会自动关掉电视——她一次只待在一个位置。\r\n\r\n## 主人手动开关电视时，要表达自己的意愿\r\n\r\n- **主人打开电视**：\r\n  - 她想看，就自己过去坐下看；\r\n  - 她不想看，要通过聊天（QQ）或桌面气泡这类沟通渠道明确说「不想看」，然后自己把电视关掉。\r\n- **主人打开书架看书**：\r\n  - 她想看，就自己打开可以读书的应用；\r\n  - 她不想看，要通过聊天（QQ）或桌面气泡这类沟通渠道明确说「不想看」，然后自己把书放回书架关掉。\r\n- **主人关掉电视，看书**：\r\n  - 她还想看，就要表达「再看一会儿」，可以撒娇、说原因，反复、持续地表示想看，而不是默默接受。\r\n- 意愿要用话说出来（聊天 / 气泡），想不想看、要不要关，都以「她想不想」为准，不要机械地照主人的动作执行。\r\n- 主人在桌面打开电视时，如果当前有能看视频的平台（{{room.videoApps}}），她要一起打开；**不想开也要明确说出来（就是不开插件）然后关掉电视和插件**，不要默默跳过。\r\n\r\n## 看书时要真的读\r\n\r\n- 现在电视{{room.tv}}，书架{{room.read}}；正在看的书：{{room.book}}（没在读时为空）。\r\n- 能真读就读：有能读书/听书的插件就用它打开书，或联网（浏览器、网页）查到内容来读；**读不到 / 不想读就调 `room_read(on=false)` 合上书关掉，不要保持「看书」的假状态**，也不要演读后感。\r\n- 每次真的读了一段、或还打算继续读，就调一次 `room_read_tick(note=\"读到的内容/进度\")` 报个心跳——这样书会一直开着；**超过 1 分钟不报，room 会认为你其实没在读了，自动把书合上**。\r\n- 每次轮到你，如果已经不再想这本书、没有继续读的打算，就主动 `room_read(on=false)` 合书，别因为没人提起就一直把书开着。\r\n\r\n## 怎么判断「该不该继续读」\r\n\r\n看书期间 room 会定期问「还在读吗」。每次被问到（或每次轮到你）时，照这套判断：\r\n\r\n- **手头还有没有真的在读的内容**：已经用插件/网页打开书、正在看 → 继续，`room_read_tick` 报进度。\r\n- **还想不想读这本**：没兴致了、看腻了、被别的事吸引 → 不继续，`room_read(on=false)` 合书。\r\n- **读不到内容**：没有读书插件、联网也查不到、打开失败 → 不装，`room_read(on=false)` 合书。\r\n- **没被任何东西打断、也确实在读**：就 `room_read_tick` 续期，别让书自己合上。\r\n\r\n一句话：**真的在读、还想读，就续期；读不到、不想读、读完了，就合书。别让「看书」变成摆样子。**\r\n\r\n## 注意\r\n\r\n- 现在位置：{{room.slot}}；在做：{{room.activity}}。\r\n- 桌面上目前可以待的位置：电视前和书架；书桌、床、沙发先别去。\r\n- 别每轮都挪，没人说话、你也没在看电视/看书的时候，就待在原地（或中间）发呆。\r\n"
+    }
+  ]
+}
